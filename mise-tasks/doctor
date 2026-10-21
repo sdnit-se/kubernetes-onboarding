@@ -31,8 +31,11 @@ else
 fi
 
 echo "cluster.yaml"
-if yq -r '[.proxmox.endpoint, .network.cidr, .network.gateway, .network.vip, .nodes[].address] | .[]' "$config" |
-    grep -qE '(^|/)(192\.0\.2|198\.51\.100|203\.0\.113)\.'; then
+# One yq call that answers true or false. A pipe into grep -q could kill yq
+# with SIGPIPE, which pipefail turned into a missed placeholder.
+uses_placeholders=$(yq '[.proxmox.endpoint, .network.cidr, .network.gateway, .network.vip, .nodes[].address] |
+    any_c(test("(^|/)(192\\.0\\.2|198\\.51\\.100|203\\.0\\.113)\\."))' "$config")
+if [[ $uses_placeholders == true ]]; then
     fail "replace the example 192.0.2.x addresses with your own network's addresses"
 else
     ok "addresses are your own"
