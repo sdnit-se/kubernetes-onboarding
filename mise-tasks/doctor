@@ -181,7 +181,7 @@ else
     fail "no active bridge named $bridge on node $node. This repository only attaches to existing bridges"
 fi
 
-factory_url="https://factory.talos.dev/versions"
+factory_url="https://factory.talos.dev/"
 if api "/nodes/$node/query-url-metadata?url=$(jq -rn --arg url "$factory_url" '$url | @uri')" >/dev/null; then
     ok "node $node can reach the Talos Image Factory"
 else

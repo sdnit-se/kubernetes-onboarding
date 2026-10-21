@@ -24,6 +24,15 @@ cp_1_exists() {
     [ "$status" -eq 0 ]
     [[ $output == *"Proxmox VE 9.0.3"* ]]
     [[ $output == *"new node(s) cp-1 (65 GiB needed)"* ]]
+    [[ $output == *"can reach the Talos Image Factory"* ]]
+}
+
+@test "a failed Image Factory metadata query blocks readiness" {
+    rm "$API_ROOT/nodes/pve/query-url-metadata"
+    run mise-tasks/doctor
+    [ "$status" -eq 1 ]
+    [[ $output == *"FAIL"*"Talos"* ]]
+    [[ $output != *"Everything mise run plan needs is in place"* ]]
 }
 
 @test "documentation placeholders stop before contacting anything" {

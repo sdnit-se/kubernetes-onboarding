@@ -104,7 +104,7 @@ mutating_calls() {
 }
 
 # A minimal Proxmox API: each JSON file under $API_ROOT answers the GET with
-# that path. Query strings are ignored, which is enough for these checks.
+# that path. The metadata endpoint also models the Factory's HEAD restriction.
 start_fake_proxmox() {
     API_ROOT=$BATS_TEST_TMPDIR/api/api2/json
     mkdir -p "$API_ROOT/access" "$API_ROOT/cluster" "$API_ROOT/nodes/pve"
@@ -123,12 +123,25 @@ start_fake_proxmox() {
     echo '{"data":[{"iface":"vmbr0","type":"bridge","active":1},{"iface":"eno1","type":"eth","active":1}]}' \
         >"$API_ROOT/nodes/pve/network"
     echo '{"data":[{"vmid":101,"name":"pihole","type":"qemu","tags":""}]}' >"$API_ROOT/cluster/resources"
-    echo '{"data":{"filename":"versions","size":512}}' >"$API_ROOT/nodes/pve/query-url-metadata"
+    echo '{"data":{}}' >"$API_ROOT/nodes/pve/query-url-metadata"
 
     "$PYTHON3" - "$BATS_TEST_TMPDIR/api" "$BATS_TEST_TMPDIR/port" <<'EOF' &
-import functools, http.server, sys
-handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=sys.argv[1])
-handler.func.log_message = lambda *args: None
+import functools, http.server, sys, urllib.parse
+
+class ProxmoxHandler(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        request = urllib.parse.urlsplit(self.path)
+        if request.path.endswith("/query-url-metadata"):
+            target = urllib.parse.parse_qs(request.query).get("url", [""])[0]
+            if target == "https://factory.talos.dev/versions":
+                self.send_error(500, "invalid server response: '405 Method Not Allowed'")
+                return
+        super().do_GET()
+
+handler = functools.partial(ProxmoxHandler, directory=sys.argv[1])
 server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
 open(sys.argv[2], "w").write(str(server.server_port))
 server.serve_forever()
