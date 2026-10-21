@@ -1,0 +1,11 @@
+# Argo CD's version and settings live here, and only `mise run bootstrap`
+# installs or upgrades them. Argo CD does not manage itself.
+apiVersion: v2
+name: argocd
+description: Argo CD for this cluster
+type: application
+version: 1.0.0
+dependencies:
+  - name: argo-cd
+    version: 10.10.5
+    repository: https://argoproj.github.io/argo-helm

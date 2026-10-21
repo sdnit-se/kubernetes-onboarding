@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+#MISE description="Install or upgrade Argo CD, then let it sync kubernetes/apps from Git"
+#USAGE flag "--yes" help="Apply without asking for confirmation"
+set -euo pipefail
+
+"$(dirname "${BASH_SOURCE[0]}")/kubeconfig/check"
+
+chart=kubernetes/bootstrap/argocd
+apps=kubernetes/bootstrap/apps.yaml
+
+repository=$(yq -r '.spec.generators[0].git.repoURL' "$apps")
+if [[ $repository == *your-org/your-cluster* ]]; then
+    echo "Set repoURL in $apps to your copy of this repository first."
+    exit 1
+fi
+
+helm repo add argo https://argoproj.github.io/argo-helm --force-update >/dev/null
+helm dependency build "$chart" >/dev/null
+
+# kubectl diff exits 1 when it finds differences and above 1 on errors.
+show_diff() {
+    local status=0
+    kubectl diff --server-side -f - || status=$?
+    ((status <= 1)) || exit "$status"
+}
+
+if helm status argocd --namespace argocd >/dev/null 2>&1; then
+    echo "Changes to Argo CD:"
+    helm template argocd "$chart" --namespace argocd | show_diff
+else
+    echo "Argo CD is not installed yet. This installs chart $(yq -r '.dependencies[0].version' "$chart/Chart.yaml") into the argocd namespace."
+fi
+if kubectl get crd applicationsets.argoproj.io >/dev/null 2>&1; then
+    echo "Changes to the apps ApplicationSet:"
+    show_diff <"$apps"
+else
+    echo "Then it creates the apps ApplicationSet, which syncs kubernetes/apps from $repository."
+fi
+
+if [[ ${usage_yes:-false} != true ]]; then
+    read -rp "Apply these changes? [y/N] " answer
+    [[ $answer == [yY] ]] || exit 1
+fi
+
+helm upgrade --install argocd "$chart" --namespace argocd --create-namespace
+for workload in deployment/argocd-server deployment/argocd-repo-server deployment/argocd-applicationset-controller statefulset/argocd-application-controller; do
+    kubectl --namespace argocd rollout status "$workload" --timeout=5m
+done
+kubectl apply --server-side -f "$apps"
+
+echo
+echo "Argo CD is syncing. Open the dashboard with: mise run argocd"

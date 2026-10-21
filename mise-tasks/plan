@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+#MISE description="Preview infrastructure changes and save them for mise run apply"
+#MISE depends=["doctor"]
+set -euo pipefail
+
+mkdir -p .local
+tofu -chdir=infrastructure init -input=false -lockfile=readonly >/dev/null
+# The saved plan is encrypted like the state. apply refuses it once anything
+# it was based on has changed.
+tofu -chdir=infrastructure plan -input=false -out=../.local/infrastructure.tfplan "$@"
+
+echo
+echo "Nothing has changed yet. If the plan above is what you expect, run: mise run apply"

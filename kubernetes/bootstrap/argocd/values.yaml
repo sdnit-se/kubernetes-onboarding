@@ -1,0 +1,30 @@
+argo-cd:
+  global:
+    domain: argocd
+
+  configs:
+    cm:
+      # Apps in kubernetes/apps install upstream Helm charts through kustomize.
+      kustomize.buildOptions: --enable-helm
+    params:
+      # Argo CD serves plain HTTP. Over Tailscale, WireGuard encrypts the hop
+      # from your device to the Tailscale proxy pod; from that proxy to
+      # argocd-server the request is plain HTTP on the cluster network.
+      # `mise run argocd` instead tunnels through the Kubernetes API's TLS
+      # connection to a port-forward on your own machine.
+      server.insecure: true
+
+  server:
+    service:
+      # The Tailscale operator gives this Service a tailnet address and the
+      # name argocd. Until the operator runs, it simply waits.
+      type: LoadBalancer
+      loadBalancerClass: tailscale
+      annotations:
+        tailscale.com/hostname: argocd
+
+  # Single sign-on and notifications are off until you need them.
+  dex:
+    enabled: false
+  notifications:
+    enabled: false

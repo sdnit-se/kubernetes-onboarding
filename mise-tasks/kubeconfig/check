@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+#MISE description="Confirm kubectl points at this repository's cluster and nowhere else"
+# Every task that reads from or changes the cluster runs this first, so a
+# kubeconfig from another cluster or your default ~/.kube/config is never used.
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+expected=$root/.local/kubeconfig
+cluster=$(yq -r '.name' "$root/cluster.yaml")
+server="https://$(yq -r '.network.vip' "$root/cluster.yaml"):6443"
+
+if [[ ${KUBECONFIG:-} != "$expected" ]]; then
+    echo "KUBECONFIG is '${KUBECONFIG:-unset}'. Tasks only use $expected; run them with mise run."
+    exit 1
+fi
+if [[ ! -s $expected ]]; then
+    echo "$expected does not exist. Run mise run credentials once mise run apply has finished."
+    exit 1
+fi
+context=$(kubectl config current-context 2>/dev/null || true)
+actual_server=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || true)
+if [[ $context != "admin@$cluster" || $actual_server != "$server" ]]; then
+    echo "$expected is for '$context' at '$actual_server', not admin@$cluster at $server."
+    echo "Run mise run credentials to rewrite it from this repository's state."
+    exit 1
+fi
+# The kubeconfig pins the cluster's CA, so this also proves the server is ours.
+if ! kubectl get --raw /version >/dev/null; then
+    echo "Cannot reach $server with $expected."
+    exit 1
+fi

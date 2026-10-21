@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+#MISE description="Apply exactly the plan saved by mise run plan, then write credentials"
+set -euo pipefail
+
+plan=.local/infrastructure.tfplan
+if [[ ! -f $plan ]]; then
+    echo "No saved plan. Run mise run plan, read it, then run mise run apply."
+    exit 1
+fi
+
+# One change at a time, so node upgrades never take two control planes down
+# together. A failed apply is safe to resume: run plan and apply again.
+tofu -chdir=infrastructure apply -input=false -parallelism=1 "../$plan"
+rm "$plan"
+
+mise run credentials

@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: arc-runners
+  labels:
+    # Docker-in-Docker needs a privileged container. Talos enforces the
+    # baseline Pod Security level everywhere else; only this namespace opts out.
+    pod-security.kubernetes.io/enforce: privileged
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false

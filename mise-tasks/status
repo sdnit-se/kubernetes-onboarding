@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+#MISE description="Show cluster health, Argo CD apps and whether your newest backup covers every sealing key"
+set -euo pipefail
+
+"$(dirname "${BASH_SOURCE[0]}")/kubeconfig/check"
+
+cluster=$(yq -r '.name' cluster.yaml)
+directory=$(yq -r '.backup.directory' cluster.yaml)
+marker=$directory/$cluster-latest.yaml
+
+echo "Nodes"
+kubectl get nodes -o wide
+echo
+echo "Argo CD applications"
+kubectl --namespace argocd get applications.argoproj.io \
+    -o custom-columns='NAME:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status,REVISION:.status.sync.revision' 2>/dev/null ||
+    echo "Argo CD is not installed yet. Run mise run bootstrap."
+echo
+echo "Backup"
+current=$(kubectl --namespace kube-system get secret --selector sealedsecrets.bitnami.com/sealed-secrets-key \
+    -o jsonpath='{.items[*].metadata.name}' | tr ' ' '\n' | sed '/^$/d' | sort)
+if [[ -z $current ]]; then
+    echo "  Sealed Secrets has not created a key yet."
+    exit 0
+fi
+if [[ ! -f $marker ]]; then
+    echo "  No backup in $directory yet. Run mise run backup, then mise run schedule-backup."
+    exit 1
+fi
+archive=$directory/$(yq -r '.archive' "$marker")
+if [[ ! -s $archive ]]; then
+    echo "  The newest backup, $archive, is missing. Run mise run backup now."
+    exit 1
+fi
+missing=$(comm -23 <(printf '%s\n' "$current") <(yq -r '.sealing_keys[]' "$marker" | sort) | sed '/^$/d')
+if [[ -n $missing ]]; then
+    echo "  Not in $archive: $(tr '\n' ' ' <<<"$missing")"
+    echo "  Run mise run backup now."
+    exit 1
+fi
+echo "  $archive holds every sealing key."

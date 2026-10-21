@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+#MISE description="Render Argo CD and every app the way Argo CD does, then check them against Kubernetes schemas"
+set -euo pipefail
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+helm repo add argo https://argoproj.github.io/argo-helm --force-update >/dev/null
+helm dependency build kubernetes/bootstrap/argocd >/dev/null
+helm template argocd kubernetes/bootstrap/argocd --namespace argocd >"$work/argocd.yaml"
+for app in kubernetes/apps/*/; do
+    kustomize build --enable-helm "$app" >"$work/$(basename "$app").yaml"
+done
+
+# Upstream charts ship their own CRD definitions; their custom resources are
+# checked against the community CRD schema catalog.
+kubeconform -strict -summary -kubernetes-version "$(yq -r '.kubernetes.version | sub("^v"; "")' cluster.yaml)" \
+    -skip CustomResourceDefinition \
+    -schema-location default \
+    -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+    "$work"/*.yaml kubernetes/bootstrap/apps.yaml

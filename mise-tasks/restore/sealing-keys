@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+#MISE description="Load the sealing keys from an encrypted backup into this cluster"
+#USAGE arg "<archive>" help="Backup file written by mise run backup"
+#USAGE flag "--identity <file>" help="age identity (private key) file; prompts when omitted"
+set -euo pipefail
+
+"$(dirname "${BASH_SOURCE[0]}")/../kubeconfig/check"
+
+umask 077
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+if [[ -z ${usage_identity:-} ]]; then
+    echo "Paste the age identity (AGE-SECRET-KEY-...) and press Ctrl-D:"
+fi
+age --decrypt --identity "${usage_identity:-/dev/stdin}" "${usage_archive:?}" | tar -xf - -C "$work" sealing-keys.yaml
+
+# The controller loads every key with the sealed-secrets-key label when it
+# starts. Run this before mise run bootstrap, or let the restart below pick
+# the keys up on a cluster where Sealed Secrets already runs.
+kubectl apply --server-side -f "$work/sealing-keys.yaml"
+if kubectl --namespace kube-system get deployment/sealed-secrets-controller >/dev/null 2>&1; then
+    kubectl --namespace kube-system rollout restart deployment/sealed-secrets-controller
+fi
+echo "Loaded sealing keys: $(yq -r '[.items[].metadata.name] | join(" ")' "$work/sealing-keys.yaml")"

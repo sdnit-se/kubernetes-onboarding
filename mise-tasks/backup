@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+#MISE description="Write an encrypted backup of OpenTofu state and every current sealing key"
+# Needs neither the backup key nor the state passphrase: the state is already
+# encrypted and age encrypts to public keys. It does use the admin kubeconfig.
+# That is what lets schedule-backup run it unattended.
+set -euo pipefail
+
+"$(dirname "${BASH_SOURCE[0]}")/kubeconfig/check"
+
+cluster=$(yq -r '.name' cluster.yaml)
+directory=$(yq -r '.backup.directory' cluster.yaml)
+marker=$directory/$cluster-latest.yaml
+
+recipient_args=()
+while IFS= read -r recipient; do
+    recipient_args+=(--recipient "$recipient")
+done < <(yq -r '.backup.age_recipients[]' cluster.yaml)
+if ((${#recipient_args[@]} == 0)); then
+    echo "Add an age public key to backup.age_recipients in cluster.yaml first."
+    exit 1
+fi
+if [[ ! -f infrastructure/terraform.tfstate ]]; then
+    echo "infrastructure/terraform.tfstate does not exist. Run mise run apply first, or restore it with mise run restore:state."
+    exit 1
+fi
+
+umask 077
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+# The state file is already encrypted with your state passphrase.
+cp infrastructure/terraform.tfstate "$work/terraform.tfstate"
+# Only the fields a rebuilt cluster can accept: no uid or resourceVersion.
+kubectl --namespace kube-system get secret --selector sealedsecrets.bitnami.com/sealed-secrets-key -o yaml |
+    yq '.items[] |= {"apiVersion": .apiVersion, "kind": .kind, "type": .type, "data": .data,
+        "metadata": {"name": .metadata.name, "namespace": .metadata.namespace, "labels": .metadata.labels}}' \
+        >"$work/sealing-keys.yaml"
+key_names=$(yq -r '[.items[].metadata.name] | sort | join(" ")' "$work/sealing-keys.yaml")
+if [[ -z $key_names ]]; then
+    echo "The cluster has no sealing keys yet. Wait for Argo CD to install Sealed Secrets, then try again."
+    exit 1
+fi
+# A change check, not a security check.
+state_checksum=$(cksum <"$work/terraform.tfstate")
+
+if [[ -f $marker ]]; then
+    previous_archive=$directory/$(yq -r '.archive' "$marker")
+    if [[ -s $previous_archive && $(yq -r '.state_checksum' "$marker") == "$state_checksum" &&
+        $(yq -r '.sealing_keys | join(" ")' "$marker") == "$key_names" ]]; then
+        echo "Nothing changed since $previous_archive."
+        exit 0
+    fi
+fi
+
+mkdir -p "$directory"
+archive=$cluster-$(date -u +%Y%m%dT%H%M%SZ).tar.age
+while [[ -e $directory/$archive ]]; do
+    sleep 1
+    archive=$cluster-$(date -u +%Y%m%dT%H%M%SZ).tar.age
+done
+tar -cf - -C "$work" terraform.tfstate sealing-keys.yaml | age "${recipient_args[@]}" >"$directory/$archive.partial"
+mv "$directory/$archive.partial" "$directory/$archive"
+
+# Plain metadata, nothing secret: status uses it to check that the newest
+# archive still exists and holds every sealing key the cluster uses.
+ARCHIVE=$archive CHECKSUM=$state_checksum KEYS=$key_names yq -n \
+    '.archive = strenv(ARCHIVE) | .state_checksum = strenv(CHECKSUM) | .sealing_keys = (strenv(KEYS) | split(" "))' \
+    >"$marker"
+
+echo "Wrote $directory/$archive with sealing keys: $key_names"
+echo "It is encrypted to backup.age_recipients. Keep it on storage that survives losing this computer and the cluster."

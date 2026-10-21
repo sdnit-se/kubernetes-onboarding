@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+#MISE description="Encrypt a Secret for an app in kubernetes/apps so it can be committed"
+#USAGE arg "<app>" help="App directory name under kubernetes/apps"
+#USAGE arg "<namespace>" help="Namespace the Secret is created in"
+#USAGE arg "<name>" help="Secret name the app reads"
+#USAGE arg "<key>..." help="Secret keys. key prompts for a hidden value; key=@path reads a file"
+set -euo pipefail
+
+"$(dirname "${BASH_SOURCE[0]}")/kubeconfig/check"
+
+app_dir="kubernetes/apps/$1"
+namespace=$2
+name=$3
+shift 3
+keys=("$@")
+output="$app_dir/$name.sealed.yaml"
+
+if [[ ! -f $app_dir/kustomization.yaml ]]; then
+    echo "$app_dir/kustomization.yaml does not exist."
+    exit 1
+fi
+
+umask 077
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+# Values go through files, never command-line arguments, so they do not show
+# up in the process list or shell history.
+from_files=()
+for key in "${keys[@]}"; do
+    if [[ $key == *=@* ]]; then
+        cp "${key#*=@}" "$work/${key%%=@*}"
+        key=${key%%=@*}
+    else
+        read -rsp "$key (input hidden): " value
+        echo
+        printf '%s' "$value" >"$work/$key"
+    fi
+    from_files+=(--from-file="$key=$work/$key")
+done
+
+kubectl create secret generic "$name" --namespace "$namespace" "${from_files[@]}" --dry-run=client -o yaml >"$work/secret.yaml"
+
+if [[ -f $output ]]; then
+    kubeseal --format yaml --merge-into "$output" <"$work/secret.yaml"
+else
+    kubeseal --format yaml <"$work/secret.yaml" >"$output"
+fi
+
+resource=$(basename "$output")
+if ! yq -e ".resources // [] | contains([\"$resource\"])" "$app_dir/kustomization.yaml" >/dev/null; then
+    (cd "$app_dir" && kustomize edit add resource "$resource")
+fi
+
+echo "Wrote $output. Only this cluster can decrypt it. Commit and push it; Argo CD creates Secret $namespace/$name."

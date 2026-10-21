@@ -1,0 +1,64 @@
+# Your cluster's machines, in one file. OpenTofu reads it to build the Proxmox
+# VMs and Talos configuration; mise run doctor and backup read it too.
+#
+# The 192.0.2.x addresses are documentation placeholders that never route
+# anywhere. `mise run doctor` refuses to continue until you replace them.
+
+name: lab
+
+talos:
+  # The Talos release installed on every node. Raise it to upgrade.
+  version: v1.14.4
+  # The release this cluster was created with. It picks the boot ISO and the
+  # machine-config format. Leave it alone after the first apply.
+  initial_version: v1.14.4
+
+kubernetes:
+  # Raise it to upgrade Kubernetes. Talos supports up to v1.37.x on 1.14.
+  version: v1.37.1
+
+proxmox:
+  # The URL you open in a browser for the Proxmox web UI.
+  endpoint: https://192.0.2.10:8006/
+  # true skips TLS verification. Prefer a trusted certificate on Proxmox.
+  insecure_tls: false
+  # Proxmox node name, shown in the left tree of the web UI.
+  node: pve
+  # Storage that allows "ISO image" content. Holds the Talos boot ISO.
+  iso_storage: local
+  # Storage that allows "Disk image" content. Holds VM disks.
+  vm_storage: local-lvm
+  # Existing bridge connected to your LAN. It is used as-is, never changed.
+  bridge: vmbr0
+  # VLAN tag for the VM network card. Leave it out on an untagged LAN.
+  # vlan_id: 20
+
+network:
+  cidr: 192.0.2.0/24
+  gateway: 192.0.2.1
+  dns_servers:
+    - 192.0.2.1
+  # The Kubernetes API address. Reserve it, and every node address below,
+  # outside your DHCP pool. Planning pings them as a best-effort check, but
+  # silence does not prove an address is free.
+  vip: 192.0.2.50
+
+# One entry per VM. The name is the VM name and hostname, and it must never
+# change. Add workers below; existing nodes are left untouched.
+nodes:
+  cp-1:
+    role: controlplane
+    vm_id: 8001
+    address: 192.0.2.51
+    cpu_cores: 4
+    memory_mib: 8192
+    disk_gib: 64
+
+# Read by mise run backup and status, ignored by OpenTofu.
+backup:
+  # Public keys from `age-keygen`. Backups are encrypted to these recipients.
+  # Keep the matching private key in your password manager, not on this disk.
+  age_recipients: []
+  # Where `mise run backup` writes encrypted archives. Point it at storage that
+  # survives losing this laptop and the cluster, such as a NAS share.
+  directory: backups

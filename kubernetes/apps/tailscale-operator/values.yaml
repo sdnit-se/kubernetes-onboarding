@@ -1,0 +1,9 @@
+# The operator reads its OAuth client from the Secret operator-oauth, which
+# mise run seal creates (see kustomization.yaml). It joins the tailnet as this
+# hostname and tags itself and every proxy it creates.
+operatorConfig:
+  hostname: lab-k8s-operator
+  defaultTags:
+    - tag:k8s-operator
+proxyConfig:
+  defaultTags: tag:k8s

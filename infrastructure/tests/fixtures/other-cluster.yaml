@@ -1,0 +1,27 @@
+name: office
+talos:
+  version: v1.14.4
+  initial_version: v1.14.4
+kubernetes:
+  version: v1.37.1
+proxmox:
+  endpoint: https://192.0.2.10:8006/
+  insecure_tls: false
+  node: pve
+  iso_storage: local
+  vm_storage: local-lvm
+  bridge: vmbr0
+network:
+  cidr: 198.51.100.0/24
+  gateway: 198.51.100.1
+  dns_servers:
+    - 198.51.100.1
+  vip: 198.51.100.50
+nodes:
+  k8s-a:
+    role: controlplane
+    vm_id: 9001
+    address: 198.51.100.51
+    cpu_cores: 2
+    memory_mib: 4096
+    disk_gib: 32

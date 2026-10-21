@@ -1,0 +1,4 @@
+self-hosted-runner:
+  # runnerScaleSetName in kubernetes/apps/arc-runners/values.yaml
+  labels:
+    - lab

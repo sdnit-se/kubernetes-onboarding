@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+#MISE description="Run mise run backup every Monday from your crontab, so renewed sealing keys get backed up"
+set -euo pipefail
+
+if ! command -v crontab >/dev/null; then
+    echo "This computer has no crontab command. Schedule this weekly with your system's scheduler instead:"
+    echo "  cd '$PWD' && mise run backup"
+    exit 1
+fi
+
+mise_bin=${MISE_BIN:-$(command -v mise)}
+tag="# kubernetes-onboarding backup for $PWD"
+entry="17 9 * * 1 cd '$PWD' && '$mise_bin' run backup >>'$PWD/.local/backup.log' 2>&1 $tag"
+
+mkdir -p .local
+# Replace this repository's previous entry and keep every other line.
+{
+    crontab -l 2>/dev/null | grep -vF "$tag" || true
+    echo "$entry"
+} | crontab -
+
+echo "Your crontab now runs mise run backup every Monday at 09:17 and logs to .local/backup.log:"
+echo "  $entry"
+echo "Sealed Secrets renews its key every 30 days, so a backup is never more than a week behind."
+echo "This computer must be on and able to reach the cluster; mise run status reports any gap."

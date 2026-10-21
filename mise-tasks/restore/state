@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+#MISE description="Restore OpenTofu state from an encrypted backup"
+#USAGE arg "<archive>" help="Backup file written by mise run backup"
+#USAGE flag "--identity <file>" help="age identity (private key) file; prompts when omitted"
+set -euo pipefail
+
+state=infrastructure/terraform.tfstate
+
+umask 077
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+if [[ -z ${usage_identity:-} ]]; then
+    echo "Paste the age identity (AGE-SECRET-KEY-...) and press Ctrl-D:"
+fi
+age --decrypt --identity "${usage_identity:-/dev/stdin}" "${usage_archive:?}" | tar -xf - -C "$work" terraform.tfstate
+
+if [[ ! -f $state ]]; then
+    cp "$work/terraform.tfstate" "$state"
+    echo "Restored $state. Run mise run plan: a healthy cluster shows no changes."
+elif cmp -s "$work/terraform.tfstate" "$state"; then
+    echo "$state already matches the backup."
+else
+    echo "$state exists and differs from the backup, so it was left alone."
+    echo "Move it aside first if you really want the backup's copy."
+    exit 1
+fi

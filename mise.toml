@@ -1,0 +1,67 @@
+min_version = "2026.10.0"
+
+[settings]
+lockfile = true
+lockfile_platforms = ["linux-x64", "linux-arm64", "macos-x64", "macos-arm64"]
+
+[tools]
+opentofu = "1.13.1"
+talosctl = "1.14.4"
+kubectl = "1.37.1"
+helm = "4.2.1"
+kustomize = "5.8.1"
+kubeseal = "0.40.0"
+kubeconform = "0.8.0"
+age = "1.3.2"
+yq = "4.54.1"
+jq = "1.8.2"
+bats = "1.14.0"
+shellcheck = "0.11.0"
+actionlint = "1.7.12"
+zizmor = "1.31.1"
+
+[env]
+# kubectl and talosctl inside this repository talk to this cluster.
+KUBECONFIG = "{{config_root}}/.local/kubeconfig"
+TALOSCONFIG = "{{config_root}}/.local/talosconfig"
+# Helm chart repositories for this project only, not your global Helm setup.
+HELM_REPOSITORY_CONFIG = "{{config_root}}/.local/helm/repositories.yaml"
+HELM_REPOSITORY_CACHE = "{{config_root}}/.local/helm/cache"
+
+[tasks.fmt]
+description = "Format OpenTofu files"
+run = "tofu fmt -recursive infrastructure"
+
+[tasks."tofu:init"]
+description = "Install the locked OpenTofu providers for offline checks"
+# Without the backend, init needs no state passphrase and never touches state.
+run = "tofu -chdir=infrastructure init -input=false -backend=false -lockfile=readonly >/dev/null"
+
+[tasks.lint]
+description = "Check formatting, OpenTofu configuration, shell scripts and workflows"
+depends = ["tofu:init"]
+run = [
+    "tofu fmt -check -recursive infrastructure",
+    "tofu -chdir=infrastructure validate",
+    "shellcheck --external-sources $(find mise-tasks -type f) infrastructure/probe-address.sh tests/*.bats tests/*.bash",
+    "mise run lint:task-references",
+    "actionlint",
+    "zizmor --offline .github/workflows",
+]
+
+[tasks."test:tofu"]
+description = "Run OpenTofu tests: collision checks, reruns, adding workers, config validation"
+depends = ["tofu:init"]
+run = "tofu -chdir=infrastructure test"
+
+[tasks."test:tasks"]
+description = "Run the task tests against a fake Proxmox API and throwaway keys"
+run = "bats tests"
+
+[tasks.test]
+description = "Run every offline test"
+depends = ["test:tofu", "test:talos-config", "test:manifests", "test:tasks"]
+
+[tasks.check]
+description = "Everything CI runs"
+depends = ["lint", "test"]

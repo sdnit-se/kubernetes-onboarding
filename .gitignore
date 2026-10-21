@@ -1,0 +1,25 @@
+# Credentials, saved plans and anything else private that tasks write.
+/.local/
+/backups/
+mise.local.toml
+.claude/settings.local.json
+
+# OpenTofu working files and state. State is encrypted, but it still never
+# belongs in Git; mise run backup keeps encrypted copies elsewhere.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+
+# Output of `talosctl gen config` and similar manual experiments.
+/controlplane.yaml
+/worker.yaml
+/talosconfig
+/kubeconfig
+
+# Helm dependencies downloaded from Chart.lock.
+kubernetes/bootstrap/argocd/charts/
+
+# Charts kustomize downloads while rendering kubernetes/apps.
+kubernetes/apps/*/charts/

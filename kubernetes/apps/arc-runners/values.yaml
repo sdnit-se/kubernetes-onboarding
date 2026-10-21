@@ -1,0 +1,36 @@
+# The repository whose workflows may use these runners. Runners execute any
+# workflow in it with a privileged Docker daemon, so only point this at a
+# repository whose contributors you trust.
+githubConfigUrl: https://github.com/your-org/your-cluster
+# Created by mise run seal from your GitHub App's credentials; the exact
+# command is in kustomization.yaml.
+githubConfigSecret: arc-github-app
+
+# Workflows select these runners with `runs-on: lab`.
+runnerScaleSetName: lab
+
+# Concurrency: idle runners kept warm, and the most jobs running at once.
+minRunners: 0
+maxRunners: 2
+
+# Upstream Docker-in-Docker preset: a docker:dind sidecar next to the runner.
+containerMode:
+  type: dind
+
+template:
+  spec:
+    # One budget for the whole runner pod: the runner, its Docker daemon and
+    # every container a job starts inside it.
+    resources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        cpu: "2"
+        memory: 3Gi
+
+# Rendered by Argo CD without cluster access, so name the controller's
+# service account instead of letting the chart look it up.
+controllerServiceAccount:
+  namespace: arc-systems
+  name: arc-gha-rs-controller

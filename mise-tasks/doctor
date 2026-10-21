@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+#MISE description="Check cluster.yaml, your credentials and the Proxmox host before planning"
+# Read-only: every Proxmox call below is a GET.
+set -euo pipefail
+
+config=cluster.yaml
+failures=0
+
+ok() { printf '  ok    %s\n' "$1"; }
+fail() {
+    printf '  FAIL  %s\n' "$1"
+    failures=$((failures + 1))
+}
+setting() { yq -r "$1" "$config"; }
+finish() {
+    echo
+    if ((failures > 0)); then
+        echo "$failures check(s) failed. Fix them and run mise run doctor again."
+        exit 1
+    fi
+    echo "Everything mise run plan needs is in place."
+}
+
+echo "This computer"
+# macOS ships Bash 3.2; these tasks need 4.4 or newer (brew install bash).
+if ((BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4))); then
+    ok "Bash $BASH_VERSION"
+else
+    fail "Bash $BASH_VERSION is too old. Install Bash 4.4 or newer and put it first on PATH"
+    finish
+fi
+
+echo "cluster.yaml"
+if yq -r '[.proxmox.endpoint, .network.cidr, .network.gateway, .network.vip, .nodes[].address] | .[]' "$config" |
+    grep -qE '(^|/)(192\.0\.2|198\.51\.100|203\.0\.113)\.'; then
+    fail "replace the example 192.0.2.x addresses with your own network's addresses"
+else
+    ok "addresses are your own"
+fi
+if [[ $(setting '.backup.age_recipients | length') -eq 0 ]]; then
+    fail "add an age public key to backup.age_recipients (see docs/secrets-and-recovery.md)"
+else
+    ok "backups are encrypted to $(setting '.backup.age_recipients | length') recipient(s)"
+fi
+
+echo "Credentials in your environment"
+token=${PROXMOX_VE_API_TOKEN:-}
+if [[ $token =~ ^[^@]+@[^!]+![^=]+=.+$ ]]; then
+    ok "PROXMOX_VE_API_TOKEN is set (${token%%=*})"
+else
+    fail "set PROXMOX_VE_API_TOKEN to user@realm!tokenid=secret"
+fi
+passphrase=${TF_VAR_state_passphrase:-}
+if ((${#passphrase} >= 16)); then
+    ok "TF_VAR_state_passphrase is set"
+else
+    fail "set TF_VAR_state_passphrase to a passphrase of at least 16 characters"
+fi
+
+if ((failures > 0)); then
+    finish
+fi
+
+endpoint=$(setting '.proxmox.endpoint')
+endpoint=${endpoint%/}
+node=$(setting '.proxmox.node')
+iso_storage=$(setting '.proxmox.iso_storage')
+vm_storage=$(setting '.proxmox.vm_storage')
+bridge=$(setting '.proxmox.bridge')
+vlan_id=$(setting '.proxmox.vlan_id // ""')
+curl_tls=()
+if [[ $(setting '.proxmox.insecure_tls') == true ]]; then
+    curl_tls=(--insecure)
+fi
+
+api() {
+    curl --silent --show-error --fail --max-time 15 "${curl_tls[@]}" \
+        --header "Authorization: PVEAPIToken=$token" "$endpoint/api2/json$1"
+}
+
+echo "Proxmox API at $endpoint"
+if ! version=$(api /version | jq -r '.data.version'); then
+    fail "cannot reach the API with this token. Check proxmox.endpoint, the token and, for a self-signed certificate, proxmox.insecure_tls"
+    finish
+fi
+if ((${version%%.*} >= 8)); then
+    ok "Proxmox VE $version"
+else
+    fail "Proxmox VE $version is too old; Talos's recommended VM settings need 8.0 or newer"
+fi
+
+# Proxmox computes the token's effective privileges for each path itself, so
+# inherited and group permissions are already included.
+privileges_at() {
+    api "/access/permissions?path=$(jq -rn --arg path "$1" '$path | @uri')" |
+        jq -r --arg path "$1" '.data[$path] // {} | keys[]' || true
+}
+require() {
+    local path=$1 reason=$2 granted missing=()
+    shift 2
+    granted=$(privileges_at "$path")
+    for privilege in "$@"; do
+        grep -qxF "$privilege" <<<"$granted" || missing+=("$privilege")
+    done
+    if ((${#missing[@]} == 0)); then
+        ok "$reason"
+    else
+        fail "$reason: the token lacks ${missing[*]} on $path"
+    fi
+}
+
+echo "Token permissions"
+require /vms "see every VM, so VM ID collisions cannot hide" VM.Audit
+while read -r name vm_id; do
+    require "/vms/$vm_id" "create and run VM $vm_id ($name)" \
+        VM.Allocate VM.Audit VM.Config.CDROM VM.Config.CPU VM.Config.Cloudinit VM.Config.Disk \
+        VM.Config.HWType VM.Config.Memory VM.Config.Network VM.Config.Options VM.PowerMgmt
+done < <(yq -r '.nodes | to_entries[] | .key + " " + (.value.vm_id | tostring)' "$config")
+require "/storage/$vm_storage" "allocate VM disks on $vm_storage" Datastore.AllocateSpace Datastore.Audit
+require "/storage/$iso_storage" "store the Talos ISO on $iso_storage" Datastore.AllocateTemplate Datastore.Audit
+require "/sdn/zones/localnetwork/$bridge${vlan_id:+/$vlan_id}" "attach VMs to $bridge${vlan_id:+ VLAN $vlan_id}" SDN.Use
+node_privileges=$(privileges_at "/nodes/$node")
+root_privileges=$(privileges_at /)
+if grep -qxF Sys.AccessNetwork <<<"$node_privileges" ||
+    { grep -qxF Sys.Audit <<<"$root_privileges" && grep -qxF Sys.Modify <<<"$root_privileges"; }; then
+    ok "let Proxmox download the Talos ISO over its API"
+else
+    fail "let Proxmox download the Talos ISO: grant Sys.AccessNetwork on /nodes/$node, or Sys.Audit and Sys.Modify on /. This repository never falls back to SSH uploads"
+fi
+
+echo "Host capabilities on node $node"
+if ! storages=$(api "/nodes/$node/storage"); then
+    fail "cannot list storage on node $node. Check proxmox.node"
+    finish
+fi
+storage_has() {
+    jq -e --arg id "$1" --arg content "$2" \
+        '.data[] | select(.storage == $id and .active == 1 and .enabled != 0) | .content | split(",") | index($content)' \
+        <<<"$storages" >/dev/null
+}
+if storage_has "$iso_storage" iso; then
+    ok "$iso_storage is active and accepts ISO images"
+else
+    fail "$iso_storage must be active with the \"ISO image\" content type. Enable it under Datacenter > Storage, or pick another iso_storage"
+fi
+# Only nodes without a VM yet allocate new disks. A node counts as existing
+# when its VM ID holds a VM with its name and this cluster's tag, the same
+# rule the plan uses.
+if ! vms=$(api "/cluster/resources?type=vm"); then
+    fail "cannot list VMs. The token needs VM.Audit on /vms"
+    finish
+fi
+new_nodes=$(yq -o json '.nodes' "$config" | jq -c --argjson vms "$vms" --arg tag "k8s-$(setting '.name')" '
+    [to_entries[] | select(.key as $name | .value.vm_id as $id |
+        $vms.data | any(.vmid == $id and .name == $name and ((.tags // "") | split(";") | index($tag))) | not)]')
+if storage_has "$vm_storage" images; then
+    if [[ $(jq length <<<"$new_nodes") -eq 0 ]]; then
+        ok "$vm_storage accepts disk images; every node already has its disks"
+    else
+        # Each new VM also gets a small EFI disk and cloud-init drive.
+        needed_gib=$(jq '[.[].value.disk_gib + 1] | add' <<<"$new_nodes")
+        available_gib=$(jq -r --arg id "$vm_storage" '.data[] | select(.storage == $id) | (.avail // 0) / 1073741824 | floor' <<<"$storages")
+        names=$(jq -r '[.[].key] | join(", ")' <<<"$new_nodes")
+        if ((available_gib >= needed_gib)); then
+            ok "$vm_storage has ${available_gib} GiB free for new node(s) $names (${needed_gib} GiB needed)"
+        else
+            fail "$vm_storage has ${available_gib} GiB free, but new node(s) $names need ${needed_gib} GiB"
+        fi
+    fi
+else
+    fail "$vm_storage must be active with the \"Disk image\" content type"
+fi
+
+if api "/nodes/$node/network" |
+    jq -e --arg bridge "$bridge" '.data[] | select(.iface == $bridge and (.type == "bridge" or .type == "OVSBridge") and .active == 1)' >/dev/null; then
+    ok "bridge $bridge exists and is active (used as-is)"
+else
+    fail "no active bridge named $bridge on node $node. This repository only attaches to existing bridges"
+fi
+
+factory_url="https://factory.talos.dev/versions"
+if api "/nodes/$node/query-url-metadata?url=$(jq -rn --arg url "$factory_url" '$url | @uri')" >/dev/null; then
+    ok "node $node can reach the Talos Image Factory"
+else
+    fail "node $node cannot fetch $factory_url. The node needs outbound HTTPS to download the Talos ISO"
+fi
+
+finish

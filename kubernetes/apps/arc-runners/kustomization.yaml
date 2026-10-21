@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  # mise run seal arc-runners arc-runners arc-github-app github_app_id \
+  #   github_app_installation_id github_app_private_key=@path/to/app.pem
+  # adds arc-github-app.sealed.yaml here.
+helmCharts:
+  - name: gha-runner-scale-set
+    repo: oci://ghcr.io/actions/actions-runner-controller-charts
+    version: 0.15.0
+    releaseName: lab
+    namespace: arc-runners
+    valuesFile: values.yaml

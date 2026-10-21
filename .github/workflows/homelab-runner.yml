@@ -1,0 +1,24 @@
+name: homelab runner
+
+# Runs on your cluster's runners (runnerScaleSetName in
+# kubernetes/apps/arc-runners/values.yaml), only when you start it from the
+# Actions tab. Use it to confirm the runners work, then copy the job into
+# workflows that need Docker.
+on: workflow_dispatch
+
+permissions:
+  contents: read
+
+jobs:
+  docker:
+    runs-on: lab
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and run an image with the runner's own Docker daemon
+        run: |
+          docker version
+          docker build --tag "runner-check:$GITHUB_SHA" examples/runner-check
+          docker run --rm "runner-check:$GITHUB_SHA"

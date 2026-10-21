@@ -1,0 +1,34 @@
+name: lab
+talos:
+  version: v1.14.4
+  initial_version: v1.14.4
+kubernetes:
+  version: v1.37.1
+proxmox:
+  endpoint: https://192.0.2.10:8006/
+  insecure_tls: false
+  node: pve
+  iso_storage: local
+  vm_storage: local-lvm
+  bridge: vmbr0
+network:
+  cidr: 192.0.2.0/24
+  gateway: 192.0.2.1
+  dns_servers:
+    - 192.0.2.1
+  vip: 192.0.2.50
+nodes:
+  cp-1:
+    role: controlplane
+    vm_id: 8001
+    address: 192.0.2.51
+    cpu_cores: 4
+    memory_mib: 8192
+    disk_gib: 64
+  worker-1:
+    role: worker
+    vm_id: 8002
+    address: 192.0.2.52
+    cpu_cores: 4
+    memory_mib: 8192
+    disk_gib: 64

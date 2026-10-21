@@ -1,0 +1,6 @@
+# kubeseal looks for this name in kube-system by default.
+fullnameOverride: sealed-secrets-controller
+# A new sealing key every 30 days, as upstream recommends. Old keys stay so
+# existing SealedSecrets keep working. Run `mise run backup` after each one;
+# `mise run status` warns when a key is newer than your latest backup.
+keyrenewperiod: "720h"

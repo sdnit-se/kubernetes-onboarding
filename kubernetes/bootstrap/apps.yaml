@@ -1,0 +1,47 @@
+# The one Argo CD object that `mise run bootstrap` applies. It turns every
+# directory under kubernetes/apps into an Argo CD Application, so adding an app
+# is adding a directory. Set repoURL to your copy of this repository.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: apps
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - git:
+        repoURL: &repository https://github.com/your-org/your-cluster.git
+        revision: &revision main
+        directories:
+          - path: kubernetes/apps/*
+  template:
+    metadata:
+      name: "{{ .path.basename }}"
+      finalizers:
+        # Removing an app's directory removes what it installed. Namespaces
+        # are kept; see the Delete=false annotation in each namespace.yaml.
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: default
+      source:
+        repoURL: *repository
+        targetRevision: *revision
+        path: "{{ .path.path }}"
+      destination:
+        server: https://kubernetes.default.svc
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - ServerSideApply=true
+          # Apps can arrive before Sealed Secrets installs its CRD. Retry
+          # instead of failing the whole sync.
+          - SkipDryRunOnMissingResource=true
+        retry:
+          limit: 10
+          backoff:
+            duration: 30s
+            factor: 2
+            maxDuration: 10m

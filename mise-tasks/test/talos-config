@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+#MISE description="Render every node's Talos config with throwaway secrets and validate it with talosctl"
+set -euo pipefail
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+export TF_DATA_DIR=$work/data
+
+harness=infrastructure/tests/render
+tofu -chdir="$harness" init -input=false -lockfile=readonly >/dev/null
+
+for config in cluster.yaml infrastructure/tests/fixtures/two-nodes.yaml; do
+    state=$work/$(basename "$config").tfstate
+    tofu -chdir="$harness" apply -input=false -auto-approve -state="$state" \
+        -var "config_file=$PWD/$config" >/dev/null
+    while read -r node; do
+        tofu -chdir="$harness" output -state="$state" -json machine_configurations |
+            jq -r --arg node "$node" '.[$node]' >"$work/$node.yaml"
+        printf '%s, %s: ' "$config" "$node"
+        talosctl validate --mode cloud --strict --config "$work/$node.yaml"
+    done < <(yq -r '.nodes | keys[]' "$config")
+done
